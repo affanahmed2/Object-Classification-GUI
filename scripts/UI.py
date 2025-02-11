@@ -14,14 +14,17 @@ from ctypes import cast, POINTER
 sys.path.append("imports/")
 from MvCameraControl_class import *
 
+
+
 class MainWindow(QWidget):
     # Existing signal for training plus new signals for device control
     trainClicked = pyqtSignal()
-    openDeviceClicked = pyqtSignal()
-    closeDeviceClicked = pyqtSignal()
+    cam = None
+    deviceList = []
 
     def __init__(self):
         super().__init__()
+
         self.setWindowTitle("Object Classification")
         self.resize(800, 600)
         
@@ -124,9 +127,10 @@ class MainWindow(QWidget):
         # RIGHT SIDE: Contains the new device control buttons.
         right_side_layout = QVBoxLayout()
         self.open_device_button = QPushButton("Open Device")
-        self.open_device_button.clicked.connect(self.emit_open_device)
+        self.open_device_button.clicked.connect(self.on_open_device)
         self.close_device_button = QPushButton("Close Device")
-        self.close_device_button.clicked.connect(self.emit_close_device)
+        self.close_device_button.clicked.connect(self.on_close_device)
+        self.close_device_button.setEnabled(False)  # Initially disabled
         
         right_side_layout.addWidget(self.open_device_button)
         right_side_layout.addWidget(self.close_device_button)
@@ -190,7 +194,7 @@ class MainWindow(QWidget):
         options = QFileDialog.Options()
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Training Images", "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)", options=options
+            "Image Files (.png *.jpg *.jpeg *.bmp);;All Files ()", options=options
         )
         if files:
             for file in files:
@@ -236,13 +240,47 @@ class MainWindow(QWidget):
     def handle_train_button(self):
         self.trainClicked.emit()
 
-    # New methods to emit the device control signals
-    def emit_open_device(self):
-        self.openDeviceClicked.emit()
+    # --- New Device Control Methods ---
+    def on_open_device(self):
+        """Called when the Open Device button is pressed."""
+        selected_index = self.device_dropdown.currentIndex()
+        if selected_index == -1:
+            QMessageBox.warning(self, "No Device Selected", "Please select a device from the dropdown.")
+            return
 
-    def emit_close_device(self):
-        self.closeDeviceClicked.emit()
-    
+        stDevice = ctypes.cast(self.deviceList.pDeviceInfo[selected_index], ctypes.POINTER(MV_CC_DEVICE_INFO)).contents
+        # Open the selected camera using its index (modify as needed for your camera API)
+        ret = self.cam.MV_CC_CreateHandle(stDevice)
+
+        if ret != 0:
+            print(f"Failed to create handle! Error code: 0x{ret:X}")
+
+        ret = self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+        if ret != 0:
+            print(f"Failed to open device! Error code: 0x{ret:X}")
+            self.cam.MV_CC_DestroyHandle()
+        
+        self.open_device_button.setEnabled(False)
+        self.close_device_button.setEnabled(True)
+        print("Device Opened", f"Camera {selected_index} opened successfully!")
+
+        ret = self.cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            print(f"Failed to start grabbing! Error code: 0x{ret:X}")
+            self.cam.MV_CC_CloseDevice()
+            self.cam.MV_CC_DestroyHandle()
+
+    def on_close_device(self):
+        """Called when the Close Device button is pressed."""
+        self.open_device_button.setEnabled(True)
+        self.close_device_button.setEnabled(False)
+        self.cam.MV_CC_StopGrabbing()
+        self.cam.MV_CC_CloseDevice()
+        self.cam.MV_CC_DestroyHandle()
+        print("Camera resources released.")
+
+
+
     def decoding_char(self, c_ubyte_value):
         c_char_p_value = ctypes.cast(c_ubyte_value, ctypes.c_char_p)
         try:
@@ -252,19 +290,19 @@ class MainWindow(QWidget):
         return decode_str
         
     def find_devices(self):
-        cam = MvCamera()
-        cam.MV_CC_Initialize()
-        deviceList = MV_CC_DEVICE_INFO_LIST()
-        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
+        self.cam = MvCamera()
+        self.cam.MV_CC_Initialize()
+        self.deviceList = MV_CC_DEVICE_INFO_LIST()
+        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, self.deviceList)
         self.device_dropdown.clear()
         if ret != 0:
             QMessageBox.warning(self, "Error", f"Device enumeration failed! Error code: 0x{ret:X}")
             return
-        if deviceList.nDeviceNum == 0:
+        if self.deviceList.nDeviceNum == 0:
             QMessageBox.information(self, "No Devices", "No camera devices found.")
             return
-        for i in range(deviceList.nDeviceNum):
-            mvcc_dev_info = cast(deviceList.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
+        for i in range(self.deviceList.nDeviceNum):
+            mvcc_dev_info = cast(self.deviceList.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
             user_defined_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chUserDefinedName)
             model_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chModelName)
             print("device user define name: " + user_defined_name)
@@ -276,3 +314,5 @@ class MainWindow(QWidget):
                 strSerialNumber += chr(per)
             print("user serial number: " + strSerialNumber)
             self.device_dropdown.addItem(f"[{i}]USB: {user_defined_name} {model_name} ({strSerialNumber})")
+
+

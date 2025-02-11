@@ -16,8 +16,6 @@ def CreateWindow():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.trainClicked.connect(train_function)
-    window.openDeviceClicked.connect(open_device)
-    window.closeDeviceClicked.connect(close_device)
     window.show()
     sys.exit(app.exec_())
     
@@ -56,14 +54,6 @@ def train_function():
     
     print("Training finished!")
     
-
-
-
-def open_device():
-    print("Open device function called")
-
-def close_device():
-    print("Close device function called")
 
 
 
