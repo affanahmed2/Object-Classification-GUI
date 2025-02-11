@@ -1,39 +1,42 @@
 import sys
 import ctypes
-import numpy as np
+import time
 import cv2
+import numpy as np
 import csv
 import pandas as pd
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk
-import threading
-import time
 
-# Append the path for the camera SDK
+from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from PIL import Image
+
+# Append camera SDK helper path
 sys.path.append("imports/")
 from MvCameraControl_class import *
 
-###########################
-# GLOBAL VARIABLES & SETUP
-###########################
+#############################
+# Global Variables & Objects
+#############################
 
-# Initialize scaler and classifier (using 3 neighbors as before)
 scaler = StandardScaler()
 knn = KNeighborsClassifier(n_neighbors=3)
-trained = False  # flag to indicate if the model has been trained
+trained = False  # becomes True once the model is trained
 
-# These lists will store the feature vectors and class labels from training images
+# Lists to store training features and labels
 training_data = []
 training_labels = []
 # A dictionary mapping class numbers to names (for display)
 labels_dict = {}
 
-##########################################
-# Camera Initialization & Image Acquisition
-##########################################
+# This variable will store details about the last prediction overlay
+# (so it can be drawn on the live feed for a short time)
+lastPrediction = None
+
+#############################################
+# Camera Initialization and Frame Acquisition
+#############################################
 
 def init_camera():
     # Initialize the camera SDK
@@ -60,16 +63,16 @@ def init_camera():
         print(f"Failed to create handle! Error code: 0x{ret:X}")
         sys.exit()
 
-    # Open the device
+    # Open device
     ret = cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
     if ret != 0:
         print(f"Failed to open device! Error code: 0x{ret:X}")
         cam.MV_CC_DestroyHandle()
         sys.exit()
 
-    # Set camera parameters
-    cam.MV_CC_SetFloatValue("ExposureTime", 60000.0)  # Set exposure time (adjust as needed)
-    cam.MV_CC_SetEnumValue("GainAuto", 0)  # Disable auto gain
+    # Set parameters (adjust these values as needed)
+    cam.MV_CC_SetFloatValue("ExposureTime", 60000.0)
+    cam.MV_CC_SetEnumValue("GainAuto", 0)
 
     # Start grabbing frames
     ret = cam.MV_CC_StartGrabbing()
@@ -82,14 +85,13 @@ def init_camera():
     print("Camera is grabbing frames...")
     return cam
 
-# Create a global camera object (used in getOpenCVImage below)
+# Create a global camera object for use in the GUI
 cam = init_camera()
 
 def getOpenCVImage():
     """
-    Grabs an image from the camera using the SDK and converts it to an OpenCV BGR image.
+    Grabs an image frame from the camera using the SDK and converts it to an OpenCV BGR image.
     """
-    # Prepare the frame structure
     stOutFrame = MV_FRAME_OUT()
     ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
     
@@ -98,31 +100,28 @@ def getOpenCVImage():
         print(f"Failed to get image buffer! Error code: 0x{ret:X}")
         return None
 
-    # Create a buffer cache from the image data
+    # Copy the image buffer into a numpy array
     buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
     ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
-
-    width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
-    # Scale the image to a maximum size for the GUI display (here 640x480)
+    
+    width = stOutFrame.stFrameInfo.nWidth
+    height = stOutFrame.stFrameInfo.nHeight
+    # Scale the image for display in the UI (here max size is 640x480)
     scale_factor = min(640 / width, 480 / height)
     
     np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
     # Convert Bayer image to BGR format
     cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
     cv_image = cv2.resize(cv_image, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
-
-    # Free the buffer once done
+    
     cam.MV_CC_FreeImageBuffer(stOutFrame)
     return cv_image
 
 #############################################
-# Feature Extraction (HSV Histogram)
+# Feature Extraction Function (HSV Histogram)
 #############################################
 
 def extractHistogram(imagePath):
-    """
-    Reads an image from disk, converts to HSV and computes concatenated histograms for H, S, and V.
-    """
     image = cv2.imread(imagePath)
     if image is None:
         print(f"Failed to load image: {imagePath}")
@@ -135,191 +134,215 @@ def extractHistogram(imagePath):
     return features
 
 #############################################
-# Training Mode Functions
+# PyQt5 UI Classes and Functions
 #############################################
 
-def select_images_for_class(class_index):
-    """
-    Opens a file dialog for the user to select one or more images for a given class.
-    """
-    file_paths = filedialog.askopenfilenames(title=f"Select images for Class {class_index}")
-    return list(file_paths)
-
-def add_class_data(class_index):
-    """
-    Processes the selected images for a class by extracting features and updating training data.
-    """
-    global training_data, training_labels, labels_dict
-    image_paths = select_images_for_class(class_index)
-    if not image_paths:
-        messagebox.showwarning("No Selection", f"No images selected for Class {class_index}")
-        return
-    for path in image_paths:
-        features = extractHistogram(path)
-        if features is not None:
-            training_data.append(features)
-            training_labels.append(class_index)
-    # For simplicity, we assign a default class name; you can modify this to ask for custom names.
-    labels_dict[class_index] = f"Class {class_index}"
-    messagebox.showinfo("Success", f"Added {len(image_paths)} images for Class {class_index}")
-
-def train_model():
-    """
-    Trains the KNN classifier using the collected training data.
-    """
-    global trained, scaler, knn
-    if not training_data or not training_labels:
-        messagebox.showerror("Error", "No training data available. Please add training images first.")
-        return
-    X = np.array(training_data)
-    y = np.array(training_labels)
-    X_scaled = scaler.fit_transform(X)
-    knn.fit(X_scaled, y)
-    trained = True
-    messagebox.showinfo("Training Complete", "The model has been trained successfully.")
-
-#############################################
-# Classification Mode Functions & Camera Stream
-#############################################
-
-class CameraStream:
-    """
-    Handles capturing images from the camera in a separate thread and updating a Tkinter canvas.
-    """
-    def __init__(self, canvas):
-        self.canvas = canvas
-        self.running = False
-        self.thread = None
-        self.current_frame = None
-
-    def start(self):
-        self.running = True
-        self.thread = threading.Thread(target=self.update, daemon=True)
-        self.thread.start()
-
-    def update(self):
-        while self.running:
-            frame = getOpenCVImage()
-            if frame is not None:
-                self.current_frame = frame.copy()
-                # Convert BGR to RGB for Tkinter
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(frame_rgb)
-                imgtk = ImageTk.PhotoImage(image=img)
-                self.canvas.imgtk = imgtk  # Keep a reference
-                self.canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
-            time.sleep(0.03)  # Small delay to keep GUI responsive
-
-    def stop(self):
-        self.running = False
-
-def classify_region(event, cam_stream):
-    """
-    On mouse click in the classification canvas, extracts a region around the click,
-    computes its HSV histogram, and predicts the class.
-    """
-    global knn, scaler, trained, labels_dict
-    if not trained:
-        messagebox.showwarning("Not Trained", "Please train the model before classification.")
-        return
-
-    # Get click coordinates from the canvas
-    x, y = event.x, event.y
-    half_window = 50  # You can adjust the window size as needed
-    frame = cam_stream.current_frame
-    if frame is None:
-        return
-    h, w, _ = frame.shape
-    x_start = max(x - half_window, 0)
-    x_end = min(x + half_window, w)
-    y_start = max(y - half_window, 0)
-    y_end = min(y + half_window, h)
+# A custom QLabel to capture mouse clicks on the video feed
+class VideoLabel(QtWidgets.QLabel):
+    clicked = QtCore.pyqtSignal(QtCore.QPoint)
     
-    region = frame[y_start:y_end, x_start:x_end]
-    if region.size == 0:
-        return
-    hsv_region = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    h_hist = cv2.calcHist([hsv_region], [0], None, [180], [0, 256]).flatten()
-    s_hist = cv2.calcHist([hsv_region], [1], None, [256], [0, 256]).flatten()
-    v_hist = cv2.calcHist([hsv_region], [2], None, [256], [0, 256]).flatten()
-    features = np.concatenate((h_hist, s_hist, v_hist)).reshape(1, -1)
-    features_scaled = scaler.transform(features)
-    predicted_class = knn.predict(features_scaled)[0]
-    label_text = labels_dict.get(predicted_class, f"Class {predicted_class}")
+    def __init__(self, parent=None):
+        super(VideoLabel, self).__init__(parent)
+        # Disable background clearing to reduce flickering
+        self.setAttribute(QtCore.Qt.WA_OpaquePaintEvent)
     
-    # Draw a rectangle around the region and overlay the predicted class
-    cam_stream.canvas.create_rectangle(x_start, y_start, x_end, y_end, outline="magenta", width=2)
-    cam_stream.canvas.create_text(x, y - 20, text=label_text, fill="yellow", font=("Arial", 16, "bold"))
+    def mousePressEvent(self, event):
+        self.clicked.emit(event.pos())
+
+# Main application window with two tabs: Training and Classification
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+        self.setWindowTitle("General Object Classification")
+        self.resize(800, 600)
+        self.current_frame = None  # Holds the latest frame from the camera
+        self.lastPrediction = None # To store prediction details for overlay
+        
+        self.initUI()
+        
+        # QTimer to update the video feed
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.updateFrame)
+        self.timer.start(30)  # Update roughly every 30 ms
+
+    def initUI(self):
+        # Create a tab widget
+        self.tabs = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.tabs)
+        
+        # ----- Training Mode Tab -----
+        self.train_tab = QtWidgets.QWidget()
+        self.tabs.addTab(self.train_tab, "Training Mode")
+        self.trainLayout = QtWidgets.QVBoxLayout(self.train_tab)
+        
+        # Number of classes input
+        num_layout = QtWidgets.QHBoxLayout()
+        num_label = QtWidgets.QLabel("Number of Classes:")
+        self.numClassesSpin = QtWidgets.QSpinBox()
+        self.numClassesSpin.setMinimum(1)
+        self.numClassesSpin.setMaximum(10)
+        self.numClassesSpin.setValue(3)
+        num_layout.addWidget(num_label)
+        num_layout.addWidget(self.numClassesSpin)
+        self.trainLayout.addLayout(num_layout)
+        
+        # Button to create class-specific image selection buttons
+        self.setupBtn = QtWidgets.QPushButton("Setup Classes")
+        self.setupBtn.clicked.connect(self.setupClassButtons)
+        self.trainLayout.addWidget(self.setupBtn)
+        
+        # Widget to hold class buttons
+        self.classButtonsWidget = QtWidgets.QWidget()
+        self.classButtonsLayout = QtWidgets.QVBoxLayout(self.classButtonsWidget)
+        self.trainLayout.addWidget(self.classButtonsWidget)
+        
+        # Button to train the model
+        self.trainModelBtn = QtWidgets.QPushButton("Train Model")
+        self.trainModelBtn.clicked.connect(self.trainModel)
+        self.trainLayout.addWidget(self.trainModelBtn)
+        
+        # ----- Classification Mode Tab -----
+        self.class_tab = QtWidgets.QWidget()
+        self.tabs.addTab(self.class_tab, "Classification Mode")
+        self.classLayout = QtWidgets.QVBoxLayout(self.class_tab)
+        
+        # Video display label
+        self.videoLabel = VideoLabel()
+        self.videoLabel.setFixedSize(640, 480)
+        self.videoLabel.setStyleSheet("background-color: black;")
+        self.videoLabel.clicked.connect(self.onVideoClicked)
+        self.classLayout.addWidget(self.videoLabel)
+    
+    def setupClassButtons(self):
+        # Clear any existing buttons
+        for i in reversed(range(self.classButtonsLayout.count())):
+            widget = self.classButtonsLayout.takeAt(i).widget()
+            if widget is not None:
+                widget.deleteLater()
+        num = self.numClassesSpin.value()
+        for i in range(1, num + 1):
+            btn = QtWidgets.QPushButton(f"Add Images for Class {i}")
+            # Use lambda with default argument to capture current index
+            btn.clicked.connect(lambda checked, idx=i: self.addClassData(idx))
+            self.classButtonsLayout.addWidget(btn)
+    
+    def addClassData(self, class_index):
+        global training_data, training_labels, labels_dict
+        options = QFileDialog.Options()
+        files, _ = QFileDialog.getOpenFileNames(self,
+                                                f"Select Images for Class {class_index}",
+                                                "",
+                                                "Images (*.png *.jpg *.jpeg *.bmp)",
+                                                options=options)
+        if not files:
+            QMessageBox.warning(self, "No Selection", f"No images selected for Class {class_index}")
+            return
+        count = 0
+        for filePath in files:
+            features = extractHistogram(filePath)
+            if features is not None:
+                training_data.append(features)
+                training_labels.append(class_index)
+                count += 1
+        labels_dict[class_index] = f"Class {class_index}"
+        QMessageBox.information(self, "Success", f"Added {count} images for Class {class_index}")
+    
+    def trainModel(self):
+        global trained, scaler, knn
+        if not training_data or not training_labels:
+            QMessageBox.critical(self, "Error", "No training data available. Please add images first.")
+            return
+        X = np.array(training_data)
+        y = np.array(training_labels)
+        X_scaled = scaler.fit_transform(X)
+        knn.fit(X_scaled, y)
+        trained = True
+        QMessageBox.information(self, "Training Complete", "The model has been trained successfully.")
+    
+    def updateFrame(self):
+        # Get a new frame from the camera
+        frame = getOpenCVImage()
+        if frame is None:
+            return
+        self.current_frame = frame.copy()
+        
+        # If there is a recent prediction, overlay the rectangle and label
+        if self.lastPrediction is not None:
+            if time.time() - self.lastPrediction['time'] < 2.0:  # Show overlay for 2 seconds
+                x_start = self.lastPrediction['x_start']
+                y_start = self.lastPrediction['y_start']
+                x_end = self.lastPrediction['x_end']
+                y_end = self.lastPrediction['y_end']
+                label_text = self.lastPrediction['label']
+                cv2.rectangle(frame, (x_start, y_start), (x_end, y_end), (255, 0, 255), 2)
+                cv2.putText(frame, label_text, (x_start, y_start - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+            else:
+                self.lastPrediction = None
+
+        # Convert frame to QImage for display
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_rgb.shape
+        bytes_per_line = ch * w
+        qimg = QtGui.QImage(frame_rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(qimg)
+        self.videoLabel.setPixmap(pixmap)
+        
+        cv2.waitKey(1)  # Call waitKey to allow OpenCV to process events (helps with flicker)
+    
+    def onVideoClicked(self, pos):
+        global knn, scaler, trained, labels_dict
+        if not trained or self.current_frame is None:
+            QMessageBox.warning(self, "Not Trained", "Please train the model before classification.")
+            return
+        
+        half_window = 50  # Define the size of the region around the click
+        x = pos.x()
+        y = pos.y()
+        h, w, _ = self.current_frame.shape
+        x_start = max(x - half_window, 0)
+        x_end = min(x + half_window, w)
+        y_start = max(y - half_window, 0)
+        y_end = min(y + half_window, h)
+        
+        region = self.current_frame[y_start:y_end, x_start:x_end]
+        if region.size == 0:
+            return
+        
+        # Compute HSV histogram features for the selected region
+        hsv_region = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        h_hist = cv2.calcHist([hsv_region], [0], None, [180], [0, 256]).flatten()
+        s_hist = cv2.calcHist([hsv_region], [1], None, [256], [0, 256]).flatten()
+        v_hist = cv2.calcHist([hsv_region], [2], None, [256], [0, 256]).flatten()
+        features = np.concatenate((h_hist, s_hist, v_hist)).reshape(1, -1)
+        features_scaled = scaler.transform(features)
+        predicted_class = knn.predict(features_scaled)[0]
+        label_text = labels_dict.get(predicted_class, f"Class {predicted_class}")
+        
+        # Save prediction overlay details with a timestamp so it can be shown briefly
+        self.lastPrediction = {
+            'x_start': x_start,
+            'y_start': y_start,
+            'x_end': x_end,
+            'y_end': y_end,
+            'label': label_text,
+            'time': time.time()
+        }
+    
+    def closeEvent(self, event):
+        # Stop the timer and release camera resources on exit
+        self.timer.stop()
+        cam.MV_CC_StopGrabbing()
+        cam.MV_CC_CloseDevice()
+        cam.MV_CC_DestroyHandle()
+        event.accept()
 
 #############################################
-# Main GUI Setup (Tkinter)
+# Main Execution
 #############################################
 
-root = tk.Tk()
-root.title("General Object Classification GUI")
-
-# Create a Notebook with two tabs: Training Mode and Classification Mode
-notebook = ttk.Notebook(root)
-notebook.pack(fill="both", expand=True)
-
-# ----- Training Mode Tab -----
-train_tab = ttk.Frame(notebook)
-notebook.add(train_tab, text="Training Mode")
-
-# Option for user to choose number of classes
-num_classes_label = ttk.Label(train_tab, text="Number of Classes:")
-num_classes_label.pack(pady=5)
-num_classes_var = tk.IntVar(value=3)
-num_classes_spin = ttk.Spinbox(train_tab, from_=1, to=10, textvariable=num_classes_var)
-num_classes_spin.pack(pady=5)
-
-# Frame to hold buttons for each class
-classes_frame = ttk.Frame(train_tab)
-classes_frame.pack(pady=10)
-
-def setup_class_buttons():
-    # Clear previous class buttons if any
-    for widget in classes_frame.winfo_children():
-        widget.destroy()
-    num = num_classes_var.get()
-    for i in range(1, num+1):
-        btn = ttk.Button(classes_frame, text=f"Add Images for Class {i}", command=lambda idx=i: add_class_data(idx))
-        btn.pack(pady=2)
-
-setup_btn = ttk.Button(train_tab, text="Setup Classes", command=setup_class_buttons)
-setup_btn.pack(pady=5)
-
-# Button to train the model with the collected data
-train_model_btn = ttk.Button(train_tab, text="Train Model", command=train_model)
-train_model_btn.pack(pady=10)
-
-# ----- Classification Mode Tab -----
-class_tab = ttk.Frame(notebook)
-notebook.add(class_tab, text="Classification Mode")
-
-# Canvas to display the live camera feed
-cam_canvas = tk.Canvas(class_tab, width=640, height=480)
-cam_canvas.pack()
-
-# Start the camera stream in a separate thread
-cam_stream = CameraStream(cam_canvas)
-cam_stream.start()
-
-# Bind left mouse click on the canvas to trigger classification on that region
-cam_canvas.bind("<Button-1>", lambda event: classify_region(event, cam_stream))
-
-#############################################
-# Cleanup on Exit
-#############################################
-
-def on_close():
-    # Stop the camera stream and release camera resources
-    cam_stream.stop()
-    ret = cam.MV_CC_StopGrabbing()
-    cam.MV_CC_CloseDevice()
-    cam.MV_CC_DestroyHandle()
-    root.destroy()
-    print("Camera resources released.")
-
-root.protocol("WM_DELETE_WINDOW", on_close)
-root.mainloop()
+if __name__ == '__main__':
+    app = QtWidgets.QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
