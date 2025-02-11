@@ -1,19 +1,37 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow
+from UI import Ui_MainWindow
 
 sys.path.append("imports/")
-from PyUI import Ui_MainWindow
+
+
+
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        # Set up the user interface from Designer.
+        # set up the user interface from Designer.
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
+
+
+
+
+
+
+if __name__ != "__main__":
+    exit()
+    
+    
+    
+    
+    
+    
+    
+app = QApplication(sys.argv)
+window = MainWindow()
+window.show()
+sys.exit(app.exec_())
