@@ -3,10 +3,13 @@ import shutil
 import sys
 from PyQt5.QtWidgets import (
     QWidget, QTabWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayout,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea
+    QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea, QComboBox
 )
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtCore import QUrl, pyqtSignal, Qt
+
+sys.path.append("imports/")
+from MvCameraControl_class import *
 
 class MainWindow(QWidget):
     # Signal that will be emitted when the Train button is pressed.
@@ -24,11 +27,19 @@ class MainWindow(QWidget):
         self.training_tab = QWidget()
         self.setup_training_tab()
         
-        # Setup Classification tab (a simple placeholder)
+        # Setup Classification tab with device detection controls
         self.classification_tab = QWidget()
         classification_layout = QVBoxLayout()
-        classification_label = QLabel("This is the Classification tab.")
-        classification_layout.addWidget(classification_label)
+        
+        # Create a horizontal layout with an empty dropdown menu and "Find Devices" button
+        device_layout = QHBoxLayout()
+        self.device_dropdown = QComboBox()  # Initially empty
+        self.find_devices_button = QPushButton("Find Devices")
+        self.find_devices_button.clicked.connect(self.find_devices)
+        device_layout.addWidget(self.device_dropdown)
+        device_layout.addWidget(self.find_devices_button)
+        
+        classification_layout.addLayout(device_layout)
         self.classification_tab.setLayout(classification_layout)
         
         # Add tabs to the tab widget
@@ -204,3 +215,47 @@ class MainWindow(QWidget):
     def handle_train_button(self):
         # Emit the trainClicked signal when the Train button is pressed.
         self.trainClicked.emit()
+    
+    def decoding_char(self, c_ubyte_value):
+        c_char_p_value = ctypes.cast(c_ubyte_value, ctypes.c_char_p)
+        try:
+            decode_str = c_char_p_value.value.decode('gbk')  # Chinese characters
+        except UnicodeDecodeError:
+            decode_str = str(c_char_p_value.value)
+        return decode_str
+        
+    def find_devices(self):
+        
+        # Initialize Camera SDK
+        cam = MvCamera()
+        cam.MV_CC_Initialize()
+        
+        # Enumerate Devices
+        deviceList = MV_CC_DEVICE_INFO_LIST()
+        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
+        
+        # Clear the dropdown before adding new devices.
+        self.device_dropdown.clear()
+        
+        if ret != 0:
+            QMessageBox.warning(self, "Error", f"Device enumeration failed! Error code: 0x{ret:X}")
+            return
+        
+        if deviceList.nDeviceNum == 0:
+            QMessageBox.information(self, "No Devices", "No camera devices found.")
+            return
+        
+        for i in range(0, deviceList.nDeviceNum):
+            mvcc_dev_info = cast(deviceList.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
+            user_defined_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chUserDefinedName)
+            model_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chModelName)
+            print("device user define name: " + user_defined_name)
+            print("device model name: " + model_name)
+
+            strSerialNumber = ""
+            for per in mvcc_dev_info.SpecialInfo.stUsb3VInfo.chSerialNumber:
+                if per == 0:
+                    break
+                strSerialNumber = strSerialNumber + chr(per)
+            print("user serial number: " + strSerialNumber)
+            self.device_dropdown.addItem("[" + str(i) + "]USB: " + user_defined_name + " " + model_name + "(" + str(strSerialNumber) + ")")
