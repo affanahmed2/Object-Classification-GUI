@@ -29,42 +29,38 @@ class VideoThread(QThread):
         
     def run(self):
         while self._running:
+            
             # Initialize the frame structure and clear it
             stOutFrame = MV_FRAME_OUT()
             ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
             
             # Get the image buffer with a timeout of 1000ms
             ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
-            if ret == 0:
-                # Allocate a buffer and copy image data from the device pointer
-                frame_len = stOutFrame.stFrameInfo.nFrameLen
-                buf_cache = (ctypes.c_ubyte * frame_len)()
-                ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, frame_len)
-                
-                # Get image dimensions from the frame info
-                width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
-                
-                # Create a NumPy array from the buffer and reshape it
-                np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
-                
-                # Convert Bayer pattern to BGR (as your snippet does)
-                cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
-                
-                # Optionally resize the image according to a scale factor
-                scale_factor = min(1920 / width, 1080 / height)
-                cv_image = cv2.resize(cv_image, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
-                
-                # Convert BGR to RGB for proper QImage formatting
-                rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                self.changePixmap.emit(qt_image)
-                
-                # Free the image buffer per your device's API
-                self.cam.MV_CC_FreeImageBuffer(stOutFrame)
-            else:
-                print(f"Failed to get image buffer! Error code: 0x{ret:X}")
+            if ret != 0:
+                continue  # Skip this iteration if failed
+            
+            # Allocate a buffer and copy image data from the device pointer
+            buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
+            ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
+            
+            width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
+            scale_factor = min(1920 / width, 1080 / height)
+            
+            np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
+            cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
+            cv_image = cv2.resize(cv_image, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
+            
+            # Free the image buffer after copying the data
+            self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+            
+            # Convert BGR to RGB for proper QImage formatting
+            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            
+            self.changePixmap.emit(qt_image)
+            
         print("Video thread stopped.")
         
     def stop(self):
@@ -154,6 +150,7 @@ class MainWindow(QWidget):
         self.load_existing_classes()
 
     def setup_classification_tab(self):
+        
         # Create a horizontal layout to split the classification tab into two sections
         classification_layout = QHBoxLayout()
         
@@ -182,6 +179,7 @@ class MainWindow(QWidget):
         self.video_label.setFixedSize(640, 480)  # adjust size as needed
         left_side_layout.addWidget(self.video_label)
         left_side_layout.addStretch()
+        self.video_label.setScaledContents(True)
         
         # MIDDLE: Add a vertical separator between left and right sections.
         separator = QFrame()
@@ -341,19 +339,26 @@ class MainWindow(QWidget):
             self.video_thread.start()
 
     def update_image(self, qt_image):
-        # Update the QLabel on the UI with the new frame
-        self.video_label.setPixmap(QPixmap.fromImage(qt_image))
+        pixmap = QPixmap.fromImage(qt_image)
+        scaled_pixmap = pixmap.scaled(
+            self.video_label.size(), 
+            Qt.KeepAspectRatio, 
+            Qt.SmoothTransformation
+        )
+        self.video_label.setPixmap(scaled_pixmap)
+
     
     def on_close_device(self):
         """Called when the Close Device button is pressed."""
-        self.open_device_button.setEnabled(True)
-        self.close_device_button.setEnabled(False)
         if hasattr(self, 'video_thread'):
             self.video_thread.stop()
+            self.cam.MV_CC_StopGrabbing()
+            self.cam.MV_CC_CloseDevice()
+            self.cam.MV_CC_DestroyHandle()
             self.video_thread.wait()  # Wait for the thread to finish
-        self.cam.MV_CC_StopGrabbing()
-        self.cam.MV_CC_CloseDevice()
-        self.cam.MV_CC_DestroyHandle()
+        
+        self.open_device_button.setEnabled(True)
+        self.close_device_button.setEnabled(False)
         print("Camera resources released.")
 
     def decoding_char(self, c_ubyte_value):
