@@ -1,21 +1,78 @@
 import os
 import shutil
 import sys
+import ctypes
+import cv2
+import numpy as np
+
 from PyQt5.QtWidgets import (
     QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea, QComboBox,
     QSizePolicy, QFrame
 )
-from PyQt5.QtGui import QDesktopServices
-from PyQt5.QtCore import QUrl, pyqtSignal, Qt
-import ctypes
-from ctypes import cast, POINTER
+from PyQt5.QtGui import QDesktopServices, QImage, QPixmap
+from PyQt5.QtCore import QUrl, pyqtSignal, Qt, QThread
+
+from ctypes import cast, POINTER, byref
 
 sys.path.append("imports/")
 from MvCameraControl_class import *
 
+# --- New Video Thread for continuous camera capture ---
+class VideoThread(QThread):
+    changePixmap = pyqtSignal(QImage)
+    
+    def __init__(self, cam):
+        super(VideoThread, self).__init__()
+        self.cam = cam
+        self._running = True
+        
+    def run(self):
+        while self._running:
+            # Initialize the frame structure and clear it
+            stOutFrame = MV_FRAME_OUT()
+            ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
+            
+            # Get the image buffer with a timeout of 1000ms
+            ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
+            if ret == 0:
+                # Allocate a buffer and copy image data from the device pointer
+                frame_len = stOutFrame.stFrameInfo.nFrameLen
+                buf_cache = (ctypes.c_ubyte * frame_len)()
+                ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, frame_len)
+                
+                # Get image dimensions from the frame info
+                width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
+                
+                # Create a NumPy array from the buffer and reshape it
+                np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
+                
+                # Convert Bayer pattern to BGR (as your snippet does)
+                cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
+                
+                # Optionally resize the image according to a scale factor
+                scale_factor = min(1920 / width, 1080 / height)
+                cv_image = cv2.resize(cv_image, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
+                
+                # Convert BGR to RGB for proper QImage formatting
+                rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                self.changePixmap.emit(qt_image)
+                
+                # Free the image buffer per your device's API
+                self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+            else:
+                print(f"Failed to get image buffer! Error code: 0x{ret:X}")
+        print("Video thread stopped.")
+        
+    def stop(self):
+        self._running = False
 
 
+
+# --- Main Window (UI) ---
 class MainWindow(QWidget):
     # Existing signal for training plus new signals for device control
     trainClicked = pyqtSignal()
@@ -100,7 +157,7 @@ class MainWindow(QWidget):
         # Create a horizontal layout to split the classification tab into two sections
         classification_layout = QHBoxLayout()
         
-        # LEFT SIDE: Contains the device toolbar (dropdown and "Find Devices" button)
+        # LEFT SIDE: Contains the device toolbar (dropdown, "Find Devices" button, and video feed)
         left_side_layout = QVBoxLayout()
         device_layout = QHBoxLayout()
         
@@ -110,13 +167,20 @@ class MainWindow(QWidget):
         
         # Create a smaller "Find Devices" button by setting a fixed width.
         self.find_devices_button = QPushButton("Find Devices")
-        self.find_devices_button.setFixedWidth(100)  # Adjust width as needed
+        self.find_devices_button.setFixedWidth(100)
         self.find_devices_button.clicked.connect(self.find_devices)
         
         # Add widgets to the device layout in the desired order.
         device_layout.addWidget(self.device_dropdown)
         device_layout.addWidget(self.find_devices_button)
         left_side_layout.addLayout(device_layout)
+        
+        # Add a QLabel to display the video feed (initially showing placeholder text)
+        self.video_label = QLabel("Video Feed")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setFixedSize(640, 480)  # adjust size as needed
+        left_side_layout.addWidget(self.video_label)
         left_side_layout.addStretch()
         
         # MIDDLE: Add a vertical separator between left and right sections.
@@ -251,14 +315,15 @@ class MainWindow(QWidget):
         stDevice = ctypes.cast(self.deviceList.pDeviceInfo[selected_index], ctypes.POINTER(MV_CC_DEVICE_INFO)).contents
         # Open the selected camera using its index (modify as needed for your camera API)
         ret = self.cam.MV_CC_CreateHandle(stDevice)
-
         if ret != 0:
             print(f"Failed to create handle! Error code: 0x{ret:X}")
+            return
 
         ret = self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             print(f"Failed to open device! Error code: 0x{ret:X}")
             self.cam.MV_CC_DestroyHandle()
+            return
         
         self.open_device_button.setEnabled(False)
         self.close_device_button.setEnabled(True)
@@ -269,17 +334,27 @@ class MainWindow(QWidget):
             print(f"Failed to start grabbing! Error code: 0x{ret:X}")
             self.cam.MV_CC_CloseDevice()
             self.cam.MV_CC_DestroyHandle()
+        else:
+            # Start the video thread to continuously fetch frames
+            self.video_thread = VideoThread(self.cam)
+            self.video_thread.changePixmap.connect(self.update_image)
+            self.video_thread.start()
 
+    def update_image(self, qt_image):
+        # Update the QLabel on the UI with the new frame
+        self.video_label.setPixmap(QPixmap.fromImage(qt_image))
+    
     def on_close_device(self):
         """Called when the Close Device button is pressed."""
         self.open_device_button.setEnabled(True)
         self.close_device_button.setEnabled(False)
+        if hasattr(self, 'video_thread'):
+            self.video_thread.stop()
+            self.video_thread.wait()  # Wait for the thread to finish
         self.cam.MV_CC_StopGrabbing()
         self.cam.MV_CC_CloseDevice()
         self.cam.MV_CC_DestroyHandle()
         print("Camera resources released.")
-
-
 
     def decoding_char(self, c_ubyte_value):
         c_char_p_value = ctypes.cast(c_ubyte_value, ctypes.c_char_p)
@@ -314,5 +389,3 @@ class MainWindow(QWidget):
                 strSerialNumber += chr(per)
             print("user serial number: " + strSerialNumber)
             self.device_dropdown.addItem(f"[{i}]USB: {user_defined_name} {model_name} ({strSerialNumber})")
-
-
