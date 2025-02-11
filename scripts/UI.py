@@ -14,7 +14,7 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PyQt5 Tabs Example")
+        self.setWindowTitle("Object Classification")
         self.resize(800, 600)
         
         # Create the tab widget
