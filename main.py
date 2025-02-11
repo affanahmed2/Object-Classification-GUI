@@ -1,9 +1,10 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow
-from UI import Ui_MainWindow
 
+sys.path.append("scripts/")
 sys.path.append("imports/")
 
+from UI import Ui_MainWindow
 
 
 
