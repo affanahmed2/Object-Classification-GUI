@@ -22,14 +22,14 @@ from MvCameraControl_class import *
 class VideoThread(QThread):
     changePixmap = pyqtSignal(QImage)
     
-    def __init__(self, cam):
+    def __init__(self, cam, label):
         super(VideoThread, self).__init__()
         self.cam = cam
         self._running = True
-        
+        self.label = label  # Reference to the QLabel to get its size
+
     def run(self):
         while self._running:
-            
             # Initialize the frame structure and clear it
             stOutFrame = MV_FRAME_OUT()
             ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
@@ -44,23 +44,29 @@ class VideoThread(QThread):
             ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
             
             width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
-            scale_factor = min(1920 / width, 1080 / height)
-            
             np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
             cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
-            cv_image = cv2.resize(cv_image, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
             
+            # Resize image to maintain aspect ratio based on QLabel size
+            label_width, label_height = self.label.size().width(), self.label.size().height()
+            aspect_ratio = width / height
+            new_height = int(label_width / aspect_ratio) if label_width / aspect_ratio <= label_height else label_height
+            new_width = int(new_height * aspect_ratio)
+
+            # Resize the image
+            resized_image = cv2.resize(cv_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
             # Free the image buffer after copying the data
             self.cam.MV_CC_FreeImageBuffer(stOutFrame)
             
             # Convert BGR to RGB for proper QImage formatting
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             
             self.changePixmap.emit(qt_image)
-            
+
         print("Video thread stopped.")
         
     def stop(self):
@@ -79,27 +85,46 @@ class MainWindow(QWidget):
         super().__init__()
 
         self.setWindowTitle("Object Classification")
-        self.resize(800, 600)
-        
+        self.resize(1280, 720)
+
+        # Initialize the aspect ratio
+        self.aspect_ratio = 16 / 9
+
         # Create the tab widget
         self.tabs = QTabWidget()
-        
+
         # Setup Training tab
         self.training_tab = QWidget()
         self.setup_training_tab()
-        
+
         # Setup Classification tab with updated layout
         self.classification_tab = QWidget()
         self.setup_classification_tab()
-        
+
         # Add tabs to the tab widget
         self.tabs.addTab(self.training_tab, "Training")
         self.tabs.addTab(self.classification_tab, "Classification")
-        
+
         # Set the main layout of the window
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.tabs)
         self.setLayout(main_layout)
+
+    def resizeEvent(self, event):
+        """Override the resize event to maintain aspect ratio, restricting resizing diagonally."""
+        current_width = self.width()
+        current_height = self.height()
+
+        # Adjust the height based on the aspect ratio when the width changes
+        if current_width / self.aspect_ratio != current_height:
+            new_height = int(current_width / self.aspect_ratio)
+            self.resize(current_width, new_height)
+        else:
+            super().resizeEvent(event)  # Call the original resizeEvent method to handle resizing
+
+
+
+    
 
     def setup_training_tab(self):
         # [Existing training tab code remains unchanged]
@@ -150,42 +175,46 @@ class MainWindow(QWidget):
         self.load_existing_classes()
 
     def setup_classification_tab(self):
-        
         # Create a horizontal layout to split the classification tab into two sections
         classification_layout = QHBoxLayout()
-        
+
         # LEFT SIDE: Contains the device toolbar (dropdown, "Find Devices" button, and video feed)
         left_side_layout = QVBoxLayout()
         device_layout = QHBoxLayout()
-        
+
         # Create the dropdown menu and set its size policy to expand horizontally.
         self.device_dropdown = QComboBox()  # Initially empty
         self.device_dropdown.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
+
         # Create a smaller "Find Devices" button by setting a fixed width.
         self.find_devices_button = QPushButton("Find Devices")
         self.find_devices_button.setFixedWidth(100)
         self.find_devices_button.clicked.connect(self.find_devices)
-        
+
         # Add widgets to the device layout in the desired order.
         device_layout.addWidget(self.device_dropdown)
         device_layout.addWidget(self.find_devices_button)
         left_side_layout.addLayout(device_layout)
-        
+
         # Add a QLabel to display the video feed (initially showing placeholder text)
         self.video_label = QLabel("Video Feed")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: black;")
-        self.video_label.setFixedSize(640, 480)  # adjust size as needed
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # Add the QLabel to the layout
         left_side_layout.addWidget(self.video_label)
-        left_side_layout.addStretch()
-        self.video_label.setScaledContents(True)
-        
+
+        # Add stretch and set label to scale contents
+        # left_side_layout.addStretch()
+        # self.video_label.setScaledContents(True)
+
+
         # MIDDLE: Add a vertical separator between left and right sections.
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
         separator.setFrameShadow(QFrame.Sunken)
-        
+
         # RIGHT SIDE: Contains the new device control buttons.
         right_side_layout = QVBoxLayout()
         self.open_device_button = QPushButton("Open Device")
@@ -193,16 +222,16 @@ class MainWindow(QWidget):
         self.close_device_button = QPushButton("Close Device")
         self.close_device_button.clicked.connect(self.on_close_device)
         self.close_device_button.setEnabled(False)  # Initially disabled
-        
+
         right_side_layout.addWidget(self.open_device_button)
         right_side_layout.addWidget(self.close_device_button)
         right_side_layout.addStretch()
-        
+
         # Add the left layout, separator, and right layout to the main classification layout.
         classification_layout.addLayout(left_side_layout, 3)
         classification_layout.addWidget(separator)
         classification_layout.addLayout(right_side_layout, 1)
-        
+
         self.classification_tab.setLayout(classification_layout)
 
     def load_existing_classes(self):
@@ -311,7 +340,7 @@ class MainWindow(QWidget):
             return
 
         stDevice = ctypes.cast(self.deviceList.pDeviceInfo[selected_index], ctypes.POINTER(MV_CC_DEVICE_INFO)).contents
-        # Open the selected camera using its index (modify as needed for your camera API)
+        # Open the selected camera using its index
         ret = self.cam.MV_CC_CreateHandle(stDevice)
         if ret != 0:
             print(f"Failed to create handle! Error code: 0x{ret:X}")
@@ -333,19 +362,14 @@ class MainWindow(QWidget):
             self.cam.MV_CC_CloseDevice()
             self.cam.MV_CC_DestroyHandle()
         else:
-            # Start the video thread to continuously fetch frames
-            self.video_thread = VideoThread(self.cam)
+            # Start the video thread with reference to the QLabel
+            self.video_thread = VideoThread(self.cam, self.video_label)
             self.video_thread.changePixmap.connect(self.update_image)
             self.video_thread.start()
 
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image)
-        scaled_pixmap = pixmap.scaled(
-            self.video_label.size(), 
-            Qt.KeepAspectRatio, 
-            Qt.SmoothTransformation
-        )
-        self.video_label.setPixmap(scaled_pixmap)
+        self.video_label.setPixmap(pixmap)
 
     
     def on_close_device(self):
