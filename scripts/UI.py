@@ -4,6 +4,7 @@ import sys
 import ctypes
 import cv2
 import numpy as np
+from classify import classifyKNN
 
 from PyQt5.QtWidgets import (
     QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
@@ -18,26 +19,34 @@ from ctypes import cast, POINTER, byref
 sys.path.append("imports/")
 from MvCameraControl_class import *
 
+
+pause = False
+
+
 # --- New Video Thread for continuous camera capture ---
 class VideoThread(QThread):
     changePixmap = pyqtSignal(QImage)
+    modelKNN = None
     
-    def __init__(self, cam, label):
+    def __init__(self, cam, label, model):
         super(VideoThread, self).__init__()
         self.cam = cam
         self._running = True
         self.label = label  # Reference to the QLabel to get its size
-
-    def run(self):
-        while self._running:
-            # Initialize the frame structure and clear it
+        self.modelKNN = model
+    
+    
+    def getOpenCVImage(self):
+        # Initialize the frame structure and clear it
+            print("Getting Image per Frame")
             stOutFrame = MV_FRAME_OUT()
             ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
             
             # Get the image buffer with a timeout of 1000ms
             ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
             if ret != 0:
-                continue  # Skip this iteration if failed
+                self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+                return None, None, None, 0
             
             # Allocate a buffer and copy image data from the device pointer
             buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
@@ -59,8 +68,26 @@ class VideoThread(QThread):
             # Free the image buffer after copying the data
             self.cam.MV_CC_FreeImageBuffer(stOutFrame)
             
+            return resized_image, new_width, new_height, 1
+        
+    def run(self):
+        global pause
+        while self._running:
+            
+            
+            if pause:
+                continue
+            
+            resized_image, nw, nh, ret = self.getOpenCVImage()
+            
+            
+            if ret == 0:
+                continue
+
+            final_image = self.modelKNN.predict(resized_image, nw, nh)
+            
             # Convert BGR to RGB for proper QImage formatting
-            rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(final_image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
@@ -80,6 +107,7 @@ class MainWindow(QWidget):
     trainClicked = pyqtSignal()
     cam = None
     deviceList = []
+    modelKNN = None
 
     def __init__(self):
         super().__init__()
@@ -205,11 +233,6 @@ class MainWindow(QWidget):
         # Add the QLabel to the layout
         left_side_layout.addWidget(self.video_label)
 
-        # Add stretch and set label to scale contents
-        # left_side_layout.addStretch()
-        # self.video_label.setScaledContents(True)
-
-
         # MIDDLE: Add a vertical separator between left and right sections.
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
@@ -225,6 +248,18 @@ class MainWindow(QWidget):
 
         right_side_layout.addWidget(self.open_device_button)
         right_side_layout.addWidget(self.close_device_button)
+
+        # Add the separator between buttons and new Capture Background button
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)  # Horizontal line
+        separator2.setFrameShadow(QFrame.Sunken)
+
+        self.capture_background_button = QPushButton("Capture Background")
+        self.capture_background_button.clicked.connect(self.capture_background)
+
+        right_side_layout.addWidget(separator2)  # Add the separator line
+        right_side_layout.addWidget(self.capture_background_button)  # Add the Capture Background button
+
         right_side_layout.addStretch()
 
         # Add the left layout, separator, and right layout to the main classification layout.
@@ -233,6 +268,48 @@ class MainWindow(QWidget):
         classification_layout.addLayout(right_side_layout, 1)
 
         self.classification_tab.setLayout(classification_layout)
+    
+    
+    def getOpenCVImage(self):
+        # Initialize the frame structure and clear it
+        
+        print("Getting Image per Back")
+        stOutFrame = MV_FRAME_OUT()
+        ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
+        
+        # Get the image buffer with a timeout of 1000ms
+        ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
+        if ret != 0:
+            self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+            return None, 0
+        
+        # Allocate a buffer and copy image data from the device pointer
+        buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
+        ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
+        
+        width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
+        np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
+        cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
+        
+        # Free the image buffer after copying the data
+        self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+        
+        return cv_image, 1
+    
+    def capture_background(self):
+        global pause
+        if pause:
+            return
+        pause = True
+        bg, ret = self.getOpenCVImage()
+        if ret == 0:
+            return
+        self.modelKNN.background = bg
+        print("GANG: ",cv2.imwrite("model/background.png", bg))
+        
+        pause = False
+        
+
 
     def load_existing_classes(self):
         for entry in os.listdir(self.dataset_dir):
@@ -354,6 +431,12 @@ class MainWindow(QWidget):
         
         self.open_device_button.setEnabled(False)
         self.close_device_button.setEnabled(True)
+
+        
+        background = cv2.imread("model/background.png")
+        
+        self.modelKNN = classifyKNN(background)
+
         print("Device Opened", f"Camera {selected_index} opened successfully!")
 
         ret = self.cam.MV_CC_StartGrabbing()
@@ -363,7 +446,7 @@ class MainWindow(QWidget):
             self.cam.MV_CC_DestroyHandle()
         else:
             # Start the video thread with reference to the QLabel
-            self.video_thread = VideoThread(self.cam, self.video_label)
+            self.video_thread = VideoThread(self.cam, self.video_label, self.modelKNN)
             self.video_thread.changePixmap.connect(self.update_image)
             self.video_thread.start()
 
