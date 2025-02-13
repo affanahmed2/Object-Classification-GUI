@@ -21,6 +21,10 @@ from MvCameraControl_class import *
 
 
 pause = False
+def_exposure = 60000
+def_threshold = 25
+def_kernel = 16
+def_area = 5000
 
 
 # --- New Video Thread for continuous camera capture ---
@@ -38,7 +42,6 @@ class VideoThread(QThread):
     
     def getOpenCVImage(self):
         # Initialize the frame structure and clear it
-            print("Getting Image per Frame")
             stOutFrame = MV_FRAME_OUT()
             ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
             
@@ -257,8 +260,79 @@ class MainWindow(QWidget):
         self.capture_background_button = QPushButton("Capture Background")
         self.capture_background_button.clicked.connect(self.capture_background)
 
+        self.capture_background_button.setEnabled(False)
+
         right_side_layout.addWidget(separator2)  # Add the separator line
+        right_side_layout.addSpacing(10)  # Add space below the separator
         right_side_layout.addWidget(self.capture_background_button)  # Add the Capture Background button
+        right_side_layout.addSpacing(10)  # Add space below the button
+
+        # Add input fields and set buttons
+        self.exposure_input = QLineEdit(str(def_exposure))
+        self.exposure_input.setPlaceholderText("Exposure")
+        self.threshold_input = QLineEdit(str(def_threshold))
+        self.threshold_input.setPlaceholderText("Threshold")
+        self.kernel_input = QLineEdit(str(def_kernel))
+        self.kernel_input.setPlaceholderText("Kernel")
+        self.min_area_input = QLineEdit(str(def_area))
+        self.min_area_input.setPlaceholderText("Min. Area")
+
+        self.exposure_button = QPushButton("Set Exposure")
+        self.exposure_button.clicked.connect(self.set_exposure)
+        self.exposure_default_button = QPushButton("Set to Default")
+        self.exposure_default_button.clicked.connect(lambda: self.custom_default_action("Exposure"))
+
+
+        self.threshold_button = QPushButton("Set Threshold")
+        self.threshold_button.clicked.connect(self.set_threshold)
+        self.threshold_default_button = QPushButton("Set to Default")
+        self.threshold_default_button.clicked.connect(lambda: self.custom_default_action("Threshold"))
+
+
+        self.kernel_button = QPushButton("Set Kernel")
+        self.kernel_button.clicked.connect(self.set_kernel)
+        self.kernel_default_button = QPushButton("Set to Default")
+        self.kernel_default_button.clicked.connect(lambda: self.custom_default_action("Kernel"))
+
+
+        self.min_area_button = QPushButton("Set Min. Area")
+        self.min_area_button.clicked.connect(self.set_min_area)
+        self.min_area_default_button = QPushButton("Set to Default")
+        self.min_area_default_button.clicked.connect(lambda: self.custom_default_action("Min. Area"))
+
+
+        # Create a layout for these input fields and buttons
+        input_layout = QVBoxLayout()
+
+        # Exposure layout
+        exposure_layout = QHBoxLayout()
+        exposure_layout.addWidget(self.exposure_input)
+        exposure_layout.addWidget(self.exposure_button)
+        exposure_layout.addWidget(self.exposure_default_button)
+        input_layout.addLayout(exposure_layout)
+
+        # Threshold layout
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(self.threshold_input)
+        threshold_layout.addWidget(self.threshold_button)
+        threshold_layout.addWidget(self.threshold_default_button)
+        input_layout.addLayout(threshold_layout)
+
+        # Kernel layout
+        kernel_layout = QHBoxLayout()
+        kernel_layout.addWidget(self.kernel_input)
+        kernel_layout.addWidget(self.kernel_button)
+        kernel_layout.addWidget(self.kernel_default_button)
+        input_layout.addLayout(kernel_layout)
+
+        # Min Area layout
+        min_area_layout = QHBoxLayout()
+        min_area_layout.addWidget(self.min_area_input)
+        min_area_layout.addWidget(self.min_area_button)
+        min_area_layout.addWidget(self.min_area_default_button)
+        input_layout.addLayout(min_area_layout)
+
+        right_side_layout.addLayout(input_layout)
 
         right_side_layout.addStretch()
 
@@ -268,12 +342,68 @@ class MainWindow(QWidget):
         classification_layout.addLayout(right_side_layout, 1)
 
         self.classification_tab.setLayout(classification_layout)
+
+    def custom_default_action(self, parameter_name):
+        # Add any additional custom actions here
+        if parameter_name == "Exposure":            
+            self.cam.MV_CC_SetFloatValue("ExposureTime", def_exposure)
+            self.exposure_input.setText(str(def_exposure))
+
+        elif parameter_name == "Threshold":
+            self.modelKNN.threshold = def_threshold
+            self.threshold_input.setText(str(def_threshold))
+
+        elif parameter_name == "Kernel":            
+            self.modelKNN.kernel = def_kernel
+            self.kernel_input.setText(str(def_kernel))
+
+        elif parameter_name == "Min. Area":
+            self.modelKNN.area = def_area
+            self.min_area_input.setText(str(def_area))
+        # You can add more custom actions as needed
+
     
-    
+    def set_exposure(self):
+        try:
+            exposure_value = int(self.exposure_input.text())
+            print(f"Exposure set to: {exposure_value}")
+            # Add logic to apply the exposure value
+            self.cam.MV_CC_SetFloatValue("ExposureTime", exposure_value)
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Exposure.")
+
+    def set_threshold(self):
+        try:
+            threshold_value = int(self.threshold_input.text())
+            print(f"Threshold set to: {threshold_value}")
+            # Add logic to apply the threshold value
+            self.modelKNN.threshold = threshold_value
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Threshold.")
+
+    def set_kernel(self):
+        try:
+            kernel_value = int(self.kernel_input.text())
+            print(f"Kernel set to: {kernel_value}")
+            # Add logic to apply the kernel value
+            self.modelKNN.kernel = kernel_value
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Kernel.")
+
+    def set_min_area(self):
+        try:
+            min_area_value = int(self.min_area_input.text())
+            print(f"Min. Area set to: {min_area_value}")
+            # Add logic to apply the minimum area value
+            self.modelKNN.area = min_area_value
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Min. Area.")
+
+
+
     def getOpenCVImage(self):
         # Initialize the frame structure and clear it
         
-        print("Getting Image per Back")
         stOutFrame = MV_FRAME_OUT()
         ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
         
@@ -305,7 +435,7 @@ class MainWindow(QWidget):
         if ret == 0:
             return
         self.modelKNN.background = bg
-        print("GANG: ",cv2.imwrite("model/background.png", bg))
+        cv2.imwrite("model/background.png", bg)
         
         pause = False
         
@@ -431,11 +561,12 @@ class MainWindow(QWidget):
         
         self.open_device_button.setEnabled(False)
         self.close_device_button.setEnabled(True)
+        self.capture_background_button.setEnabled(True)
 
         
         background = cv2.imread("model/background.png")
         
-        self.modelKNN = classifyKNN(background)
+        self.modelKNN = classifyKNN(background, def_threshold, def_kernel, def_area)
 
         print("Device Opened", f"Camera {selected_index} opened successfully!")
 
@@ -466,6 +597,7 @@ class MainWindow(QWidget):
         
         self.open_device_button.setEnabled(True)
         self.close_device_button.setEnabled(False)
+        self.capture_background_button.setEnabled(False)
         print("Camera resources released.")
 
     def decoding_char(self, c_ubyte_value):
