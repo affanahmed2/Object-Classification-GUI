@@ -8,12 +8,12 @@ This project is a GUI-based object classification tool that uses OpenCV and PyQt
 
 ## 2️⃣ Equipment and Technologies Used
 
-📷 Camera Model: Hikrobot MV-CS060-10UC-PRO
-🔬 Lens: MVL-HF0828M-6MPE
-🏗 Camera Stand: Aremak Adjustable Machine Vision Test Stand
-💡 Lighting: Hikrobot Shadowless Ring Light(MV-LGES-116-W)
-🖥️ Operating System: Windows
-🔧 Software Tools: Python, OpenCV, Hikrobot SDK, CSV, Pandas, scikit-learn, PyQt5
+- 📷 Camera Model: Hikrobot MV-CS060-10UC-PRO
+- 🔬 Lens: MVL-HF0828M-6MPE
+- 🏗 Camera Stand: Aremak Adjustable Machine Vision Test Stand
+- 💡 Lighting: Hikrobot Shadowless Ring Light(MV-LGES-116-W)
+- 🖥️ Operating System: Windows
+- 🔧 Software Tools: Python, OpenCV, Hikrobot SDK, CSV, Pandas, scikit-learn, PyQt5
 
 ## 3️⃣ Setup Photos 📸
 
