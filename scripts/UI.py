@@ -232,8 +232,6 @@ class MainWindow(QWidget):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: black;")
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        # Add the QLabel to the layout
         left_side_layout.addWidget(self.video_label)
 
         # MIDDLE: Add a vertical separator between left and right sections.
@@ -259,7 +257,6 @@ class MainWindow(QWidget):
 
         self.capture_background_button = QPushButton("Capture Background")
         self.capture_background_button.clicked.connect(self.capture_background)
-
         self.capture_background_button.setEnabled(False)
 
         right_side_layout.addWidget(separator2)  # Add the separator line
@@ -282,24 +279,20 @@ class MainWindow(QWidget):
         self.exposure_default_button = QPushButton("Set to Default")
         self.exposure_default_button.clicked.connect(lambda: self.custom_default_action("Exposure"))
 
-
         self.threshold_button = QPushButton("Set Threshold")
         self.threshold_button.clicked.connect(self.set_threshold)
         self.threshold_default_button = QPushButton("Set to Default")
         self.threshold_default_button.clicked.connect(lambda: self.custom_default_action("Threshold"))
-
 
         self.kernel_button = QPushButton("Set Kernel")
         self.kernel_button.clicked.connect(self.set_kernel)
         self.kernel_default_button = QPushButton("Set to Default")
         self.kernel_default_button.clicked.connect(lambda: self.custom_default_action("Kernel"))
 
-
         self.min_area_button = QPushButton("Set Min. Area")
         self.min_area_button.clicked.connect(self.set_min_area)
         self.min_area_default_button = QPushButton("Set to Default")
         self.min_area_default_button.clicked.connect(lambda: self.custom_default_action("Min. Area"))
-
 
         # Create a layout for these input fields and buttons
         input_layout = QVBoxLayout()
@@ -334,6 +327,23 @@ class MainWindow(QWidget):
 
         right_side_layout.addLayout(input_layout)
 
+        # dropdown to change camera output
+        change_output_layout = QHBoxLayout()
+        change_output_label = QLabel("Change output:")
+        self.output_dropdown = QComboBox()
+        self.output_dropdown.addItems([
+            "Post - Background removal",
+            "Post - Morphological",
+            "Final Classification"
+        ])
+        self.output_dropdown.currentIndexChanged.connect(self.on_output_change)
+        change_output_layout.addWidget(change_output_label)
+        change_output_layout.addWidget(self.output_dropdown)
+        right_side_layout.addLayout(change_output_layout)
+        self.output_dropdown.setCurrentIndex(2) # setting default index to 2, so it shows final screen by default
+        
+        
+
         right_side_layout.addStretch()
 
         # Add the left layout, separator, and right layout to the main classification layout.
@@ -342,6 +352,19 @@ class MainWindow(QWidget):
         classification_layout.addLayout(right_side_layout, 1)
 
         self.classification_tab.setLayout(classification_layout)
+    
+    def on_output_change(self, index):
+        """
+        Slot that updates the modelKNN.screen variable based on the dropdown selection.
+        Options are mapped as follows:
+          0 -> Post - Background removal
+          1 -> Post - Morphological
+          2 -> Final Classification
+        """
+        if self.modelKNN is not None:
+            self.modelKNN.screen = index
+            print(f"Output changed to option {index}")
+
 
     def custom_default_action(self, parameter_name):
         # Add any additional custom actions here
@@ -576,7 +599,7 @@ class MainWindow(QWidget):
             self.cam.MV_CC_CloseDevice()
             self.cam.MV_CC_DestroyHandle()
         else:
-            # Start the video thread with reference to the QLabel
+            # starting the video thread with reference to the QLabel
             self.video_thread = VideoThread(self.cam, self.video_label, self.modelKNN)
             self.video_thread.changePixmap.connect(self.update_image)
             self.video_thread.start()
@@ -593,7 +616,7 @@ class MainWindow(QWidget):
             self.cam.MV_CC_StopGrabbing()
             self.cam.MV_CC_CloseDevice()
             self.cam.MV_CC_DestroyHandle()
-            self.video_thread.wait()  # Wait for the thread to finish
+            self.video_thread.wait()  # waiting for the thread to finish
         
         self.open_device_button.setEnabled(True)
         self.close_device_button.setEnabled(False)

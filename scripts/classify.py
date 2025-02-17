@@ -16,6 +16,7 @@ class classifyKNN:
     threshold = None
     kernel = None
     area = None
+    screen = 2         # 0 -> Post - Background removal | 1 -> Post - Morphological | 2 -> Final Classification
 
     def __init__(self, bg, th, kr, ar):
         super().__init__()
@@ -39,6 +40,10 @@ class classifyKNN:
     
     def predict(self, frame, new_width, new_height):
         mask = self.apply_background_subtraction(frame, new_width, new_height)
+        
+        if self.screen != 2:
+            return mask
+        
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         
         updated_colors = {}
@@ -105,6 +110,9 @@ class classifyKNN:
         fg_mask = cv2.absdiff(gray_background, gray_frame)
         
         _, thresh = cv2.threshold(fg_mask, self.threshold, 255, cv2.THRESH_BINARY)
+        
+        if self.screen == 0:
+            return thresh
 
         # applying morphological operations to remove noise
         #kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
