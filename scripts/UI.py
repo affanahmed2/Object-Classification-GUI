@@ -100,7 +100,13 @@ class VideoThread(QThread):
         print("Video thread stopped.")
         
     def stop(self):
+        global pause
+        print("inside stop")
         self._running = False
+        pause = True
+        self.wait()
+        self.changePixmap.disconnect()
+        print("inside stop end")
 
 
 
@@ -582,6 +588,9 @@ class MainWindow(QWidget):
             print(f"Failed to open device! Error code: 0x{ret:X}")
             self.cam.MV_CC_DestroyHandle()
             return
+
+        global pause
+        pause = False
         
         self.open_device_button.setEnabled(False)
         self.close_device_button.setEnabled(True)
