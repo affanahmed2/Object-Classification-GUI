@@ -8,8 +8,8 @@ from classify import classifyKNN
 
 from PyQt5.QtWidgets import (
     QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea, QComboBox,
-    QSizePolicy, QFrame
+    QPushButton, QFileDialog, QMessageBox, QScrollArea, QComboBox,
+    QSizePolicy, QFrame, QSlider, QLineEdit
 )
 from PyQt5.QtGui import QDesktopServices, QImage, QPixmap
 from PyQt5.QtCore import QUrl, pyqtSignal, Qt, QThread
@@ -19,74 +19,65 @@ from ctypes import cast, POINTER, byref
 sys.path.append("imports/")
 from MvCameraControl_class import *
 
-
 pause = False
 def_exposure = 60000
 def_threshold = 25
 def_kernel = 16
 def_area = 5000
 
-
 # --- New Video Thread for continuous camera capture ---
 class VideoThread(QThread):
     changePixmap = pyqtSignal(QImage)
     modelKNN = None
-    
+
     def __init__(self, cam, label, model):
         super(VideoThread, self).__init__()
         self.cam = cam
         self._running = True
         self.label = label  # Reference to the QLabel to get its size
         self.modelKNN = model
-    
-    
+
     def getOpenCVImage(self):
         # Initialize the frame structure and clear it
-            stOutFrame = MV_FRAME_OUT()
-            ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
-            
-            # Get the image buffer with a timeout of 1000ms
-            ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
-            if ret != 0:
-                self.cam.MV_CC_FreeImageBuffer(stOutFrame)
-                return None, None, None, 0
-            
-            # Allocate a buffer and copy image data from the device pointer
-            buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
-            ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
-            
-            width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
-            np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
-            cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
-            
-            # Resize image to maintain aspect ratio based on QLabel size
-            label_width, label_height = self.label.size().width(), self.label.size().height()
-            aspect_ratio = width / height
-            new_height = int(label_width / aspect_ratio) if label_width / aspect_ratio <= label_height else label_height
-            new_width = int(new_height * aspect_ratio)
-
-            # Resize the image
-            resized_image = cv2.resize(cv_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-
-            # Free the image buffer after copying the data
-            self.cam.MV_CC_FreeImageBuffer(stOutFrame)
-            
-            return resized_image, new_width, new_height, 1
+        stOutFrame = MV_FRAME_OUT()
+        ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
         
+        # Get the image buffer with a timeout of 1000ms
+        ret = self.cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
+        if ret != 0:
+            self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+            return None, None, None, 0
+        
+        # Allocate a buffer and copy image data from the device pointer
+        buf_cache = (ctypes.c_ubyte * stOutFrame.stFrameInfo.nFrameLen)()
+        ctypes.memmove(ctypes.byref(buf_cache), stOutFrame.pBufAddr, stOutFrame.stFrameInfo.nFrameLen)
+        
+        width, height = stOutFrame.stFrameInfo.nWidth, stOutFrame.stFrameInfo.nHeight
+        np_image = np.ctypeslib.as_array(buf_cache).reshape(height, width)
+        cv_image = cv2.cvtColor(np_image, cv2.COLOR_BayerBG2BGR)
+        
+        # Resize image to maintain aspect ratio based on QLabel size
+        label_width, label_height = self.label.size().width(), self.label.size().height()
+        aspect_ratio = width / height
+        new_height = int(label_width / aspect_ratio) if label_width / aspect_ratio <= label_height else label_height
+        new_width = int(new_height * aspect_ratio)
+
+        # Resize the image
+        resized_image = cv2.resize(cv_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
+        # Free the image buffer after copying the data
+        self.cam.MV_CC_FreeImageBuffer(stOutFrame)
+        
+        return resized_image, new_width, new_height, 1
+
     def run(self):
         global pause
         while self._running:
-            
-            
             if pause:
                 continue
-            
             resized_image, nw, nh, ret = self.getOpenCVImage()
-            
-            
             if ret == 0:
                 continue
-
             final_image = self.modelKNN.predict(resized_image, nw, nh)
             
             # Convert BGR to RGB for proper QImage formatting
@@ -107,8 +98,6 @@ class VideoThread(QThread):
         self.wait()
         self.changePixmap.disconnect()
         print("inside stop end")
-
-
 
 # --- Main Window (UI) ---
 class MainWindow(QWidget):
@@ -157,11 +146,7 @@ class MainWindow(QWidget):
             new_height = int(current_width / self.aspect_ratio)
             self.resize(current_width, new_height)
         else:
-            super().resizeEvent(event)  # Call the original resizeEvent method to handle resizing
-
-
-
-    
+            super().resizeEvent(event)
 
     def setup_training_tab(self):
         # [Existing training tab code remains unchanged]
@@ -269,75 +254,99 @@ class MainWindow(QWidget):
         right_side_layout.addSpacing(10)  # Add space below the separator
         right_side_layout.addWidget(self.capture_background_button)  # Add the Capture Background button
         right_side_layout.addSpacing(10)  # Add space below the button
+        
+        
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.HLine)  # Horizontal line
+        separator3.setFrameShadow(QFrame.Sunken)
 
-        # Add input fields and set buttons
-        self.exposure_input = QLineEdit(str(def_exposure))
-        self.exposure_input.setPlaceholderText("Exposure")
-        self.threshold_input = QLineEdit(str(def_threshold))
-        self.threshold_input.setPlaceholderText("Threshold")
-        self.kernel_input = QLineEdit(str(def_kernel))
-        self.kernel_input.setPlaceholderText("Kernel")
-        self.min_area_input = QLineEdit(str(def_area))
-        self.min_area_input.setPlaceholderText("Min. Area")
-
-        self.exposure_button = QPushButton("Set Exposure")
-        self.exposure_button.clicked.connect(self.set_exposure)
-        self.exposure_default_button = QPushButton("Set to Default")
-        self.exposure_default_button.clicked.connect(lambda: self.custom_default_action("Exposure"))
-
-        self.threshold_button = QPushButton("Set Threshold")
-        self.threshold_button.clicked.connect(self.set_threshold)
-        self.threshold_default_button = QPushButton("Set to Default")
-        self.threshold_default_button.clicked.connect(lambda: self.custom_default_action("Threshold"))
-
-        self.kernel_button = QPushButton("Set Kernel")
-        self.kernel_button.clicked.connect(self.set_kernel)
-        self.kernel_default_button = QPushButton("Set to Default")
-        self.kernel_default_button.clicked.connect(lambda: self.custom_default_action("Kernel"))
-
-        self.min_area_button = QPushButton("Set Min. Area")
-        self.min_area_button.clicked.connect(self.set_min_area)
-        self.min_area_default_button = QPushButton("Set to Default")
-        self.min_area_default_button.clicked.connect(lambda: self.custom_default_action("Min. Area"))
-
-        # Create a layout for these input fields and buttons
+        right_side_layout.addWidget(separator3)  # Add the separator line
+        
+        right_side_layout.addSpacing(10)
+        
+        # --- Slider controls for parameters ---
         input_layout = QVBoxLayout()
 
-        # Exposure layout
+        # --- Exposure Slider Layout ---
         exposure_layout = QHBoxLayout()
-        exposure_layout.addWidget(self.exposure_input)
-        exposure_layout.addWidget(self.exposure_button)
+        exposure_label = QLabel("Exposure:")
+        self.exposure_slider = QSlider(Qt.Horizontal)
+        self.exposure_slider.setRange(32, 999812)  # Adjust range as needed
+        self.exposure_slider.setValue(def_exposure)
+        self.exposure_slider.valueChanged.connect(self.update_exposure)
+        self.exposure_value_label = QLabel(str(def_exposure))  # Label to display the value
+        self.exposure_default_button = QPushButton("Set to Default")
+        self.exposure_default_button.clicked.connect(lambda: self.set_slider_default("Exposure"))
+        exposure_layout.addWidget(exposure_label)
+        exposure_layout.addWidget(self.exposure_slider)
+        exposure_layout.addWidget(self.exposure_value_label)  # Add the value label
         exposure_layout.addWidget(self.exposure_default_button)
         input_layout.addLayout(exposure_layout)
 
-        # Threshold layout
+        # --- Threshold Slider Layout ---
         threshold_layout = QHBoxLayout()
-        threshold_layout.addWidget(self.threshold_input)
-        threshold_layout.addWidget(self.threshold_button)
+        threshold_label = QLabel("Threshold:")
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(0, 100)  # Adjust range as needed
+        self.threshold_slider.setValue(def_threshold)
+        self.threshold_slider.valueChanged.connect(self.update_threshold)
+        self.threshold_value_label = QLabel(str(def_threshold))  # New label
+        self.threshold_default_button = QPushButton("Set to Default")
+        self.threshold_default_button.clicked.connect(lambda: self.set_slider_default("Threshold"))
+        threshold_layout.addWidget(threshold_label)
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(self.threshold_value_label)  # Add the value label
         threshold_layout.addWidget(self.threshold_default_button)
         input_layout.addLayout(threshold_layout)
 
-        # Kernel layout
+        # --- Kernel Slider Layout ---
         kernel_layout = QHBoxLayout()
-        kernel_layout.addWidget(self.kernel_input)
-        kernel_layout.addWidget(self.kernel_button)
+        kernel_label = QLabel("Kernel:")
+        self.kernel_slider = QSlider(Qt.Horizontal)
+        self.kernel_slider.setRange(1, 50)  # Adjust range as needed
+        self.kernel_slider.setValue(def_kernel)
+        self.kernel_slider.valueChanged.connect(self.update_kernel)
+        self.kernel_value_label = QLabel(str(def_kernel))  # New label
+        self.kernel_default_button = QPushButton("Set to Default")
+        self.kernel_default_button.clicked.connect(lambda: self.set_slider_default("Kernel"))
+        kernel_layout.addWidget(kernel_label)
+        kernel_layout.addWidget(self.kernel_slider)
+        kernel_layout.addWidget(self.kernel_value_label)  # Add the value label
         kernel_layout.addWidget(self.kernel_default_button)
         input_layout.addLayout(kernel_layout)
 
-        # Min Area layout
+        # --- Min Area Slider Layout ---
         min_area_layout = QHBoxLayout()
-        min_area_layout.addWidget(self.min_area_input)
-        min_area_layout.addWidget(self.min_area_button)
+        min_area_label = QLabel("Min. Area:")
+        self.min_area_slider = QSlider(Qt.Horizontal)
+        self.min_area_slider.setRange(0, 50000)  # Adjust range as needed
+        self.min_area_slider.setValue(def_area)
+        self.min_area_slider.valueChanged.connect(self.update_min_area)
+        self.min_area_value_label = QLabel(str(def_area))  # New label
+        self.min_area_default_button = QPushButton("Set to Default")
+        self.min_area_default_button.clicked.connect(lambda: self.set_slider_default("Min. Area"))
+        min_area_layout.addWidget(min_area_label)
+        min_area_layout.addWidget(self.min_area_slider)
+        min_area_layout.addWidget(self.min_area_value_label)  # Add the value label
         min_area_layout.addWidget(self.min_area_default_button)
         input_layout.addLayout(min_area_layout)
 
         right_side_layout.addLayout(input_layout)
         
-        right_side_layout.addSpacing(50)
+        
+        right_side_layout.addSpacing(10)
 
-        # dropdown to change camera output
+        separator4 = QFrame()
+        separator4.setFrameShape(QFrame.HLine)  # Horizontal line
+        separator4.setFrameShadow(QFrame.Sunken)
+
+        right_side_layout.addWidget(separator4)  # Add the separator line
+        
+        right_side_layout.addSpacing(10)
+        
+        # Dropdown to change camera output
         change_output_layout = QHBoxLayout()
-        change_output_label = QLabel("Change output:")
+        change_output_label = QLabel("Change Output:")
         self.output_dropdown = QComboBox()
         self.output_dropdown.addItems([
             "Post - Background removal",
@@ -348,9 +357,7 @@ class MainWindow(QWidget):
         change_output_layout.addWidget(change_output_label)
         change_output_layout.addWidget(self.output_dropdown)
         right_side_layout.addLayout(change_output_layout)
-        self.output_dropdown.setCurrentIndex(2) # setting default index to 2, so it shows final screen by default
-        
-        
+        self.output_dropdown.setCurrentIndex(2)  # Default index set to 2
 
         right_side_layout.addStretch()
 
@@ -360,7 +367,7 @@ class MainWindow(QWidget):
         classification_layout.addLayout(right_side_layout, 1)
 
         self.classification_tab.setLayout(classification_layout)
-    
+
     def on_output_change(self, index):
         """
         Slot that updates the modelKNN.screen variable based on the dropdown selection.
@@ -372,68 +379,53 @@ class MainWindow(QWidget):
         if self.modelKNN is not None:
             self.modelKNN.screen = index
 
+    def update_exposure(self, value):
+        self.exposure_value_label.setText(str(value))  # Update the label
+        if self.cam:
+            self.cam.MV_CC_SetFloatValue("ExposureTime", value)
+
+    def update_threshold(self, value):
+        self.threshold_value_label.setText(str(value))  # Update the label
+        if self.modelKNN:
+            self.modelKNN.threshold = value
+
+    def update_kernel(self, value):
+        self.kernel_value_label.setText(str(value))  # Update the label
+        if self.modelKNN:
+            self.modelKNN.kernel = value
+
+    def update_min_area(self, value):
+        self.min_area_value_label.setText(str(value))  # Update the label
+        if self.modelKNN:
+            self.modelKNN.area = value
+
+    def set_slider_default(self, parameter):
+        if parameter == "Exposure":
+            self.exposure_slider.setValue(def_exposure)
+        elif parameter == "Threshold":
+            self.threshold_slider.setValue(def_threshold)
+        elif parameter == "Kernel":
+            self.kernel_slider.setValue(def_kernel)
+        elif parameter == "Min. Area":
+            self.min_area_slider.setValue(def_area)
 
     def custom_default_action(self, parameter_name):
-        # Add any additional custom actions here
+        # Additional custom actions (if needed) using the sliders
         if parameter_name == "Exposure":            
             self.cam.MV_CC_SetFloatValue("ExposureTime", def_exposure)
-            self.exposure_input.setText(str(def_exposure))
-
+            self.exposure_slider.setValue(def_exposure)
         elif parameter_name == "Threshold":
             self.modelKNN.threshold = def_threshold
-            self.threshold_input.setText(str(def_threshold))
-
+            self.threshold_slider.setValue(def_threshold)
         elif parameter_name == "Kernel":            
             self.modelKNN.kernel = def_kernel
-            self.kernel_input.setText(str(def_kernel))
-
+            self.kernel_slider.setValue(def_kernel)
         elif parameter_name == "Min. Area":
             self.modelKNN.area = def_area
-            self.min_area_input.setText(str(def_area))
-        # You can add more custom actions as needed
-
-    
-    def set_exposure(self):
-        try:
-            exposure_value = int(self.exposure_input.text())
-            print(f"Exposure set to: {exposure_value}")
-            # Add logic to apply the exposure value
-            self.cam.MV_CC_SetFloatValue("ExposureTime", exposure_value)
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Exposure.")
-
-    def set_threshold(self):
-        try:
-            threshold_value = int(self.threshold_input.text())
-            print(f"Threshold set to: {threshold_value}")
-            # Add logic to apply the threshold value
-            self.modelKNN.threshold = threshold_value
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Threshold.")
-
-    def set_kernel(self):
-        try:
-            kernel_value = int(self.kernel_input.text())
-            print(f"Kernel set to: {kernel_value}")
-            # Add logic to apply the kernel value
-            self.modelKNN.kernel = kernel_value
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Kernel.")
-
-    def set_min_area(self):
-        try:
-            min_area_value = int(self.min_area_input.text())
-            print(f"Min. Area set to: {min_area_value}")
-            # Add logic to apply the minimum area value
-            self.modelKNN.area = min_area_value
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a valid integer for Min. Area.")
-
-
+            self.min_area_slider.setValue(def_area)
 
     def getOpenCVImage(self):
         # Initialize the frame structure and clear it
-        
         stOutFrame = MV_FRAME_OUT()
         ctypes.memset(ctypes.byref(stOutFrame), 0, ctypes.sizeof(stOutFrame))
         
@@ -455,7 +447,7 @@ class MainWindow(QWidget):
         self.cam.MV_CC_FreeImageBuffer(stOutFrame)
         
         return cv_image, 1
-    
+
     def capture_background(self):
         global pause
         if pause:
@@ -466,10 +458,7 @@ class MainWindow(QWidget):
             return
         self.modelKNN.background = bg
         cv2.imwrite("model/background.png", bg)
-        
         pause = False
-        
-
 
     def load_existing_classes(self):
         for entry in os.listdir(self.dataset_dir):
@@ -547,7 +536,7 @@ class MainWindow(QWidget):
                 return
             widget.setParent(None)
             del self.class_widgets[class_name]
-    
+
     def delete_all_classes(self):
         reply = QMessageBox.question(
             self, 'Delete All Classes',
@@ -564,13 +553,14 @@ class MainWindow(QWidget):
                     continue
                 widget.setParent(None)
                 del self.class_widgets[class_name]
-    
+
     def handle_train_button(self):
         self.trainClicked.emit()
 
     # --- New Device Control Methods ---
     def on_open_device(self):
         """Called when the Open Device button is pressed."""
+        
         selected_index = self.device_dropdown.currentIndex()
         if selected_index == -1:
             QMessageBox.warning(self, "No Device Selected", "Please select a device from the dropdown.")
@@ -588,19 +578,18 @@ class MainWindow(QWidget):
             print(f"Failed to open device! Error code: 0x{ret:X}")
             self.cam.MV_CC_DestroyHandle()
             return
-
-        global pause
-        pause = False
         
         self.open_device_button.setEnabled(False)
         self.close_device_button.setEnabled(True)
         self.capture_background_button.setEnabled(True)
 
-        
         background = cv2.imread("model/background.png")
         
         self.modelKNN = classifyKNN(background, def_threshold, def_kernel, def_area)
-
+        
+        global pause
+        pause = False
+        
         print("Device Opened", f"Camera {selected_index} opened successfully!")
 
         ret = self.cam.MV_CC_StartGrabbing()
@@ -609,7 +598,7 @@ class MainWindow(QWidget):
             self.cam.MV_CC_CloseDevice()
             self.cam.MV_CC_DestroyHandle()
         else:
-            # starting the video thread with reference to the QLabel
+            # Start the video thread with reference to the QLabel
             self.video_thread = VideoThread(self.cam, self.video_label, self.modelKNN)
             self.video_thread.changePixmap.connect(self.update_image)
             self.video_thread.start()
@@ -618,7 +607,6 @@ class MainWindow(QWidget):
         pixmap = QPixmap.fromImage(qt_image)
         self.video_label.setPixmap(pixmap)
 
-    
     def on_close_device(self):
         """Called when the Close Device button is pressed."""
         if hasattr(self, 'video_thread'):
@@ -666,3 +654,4 @@ class MainWindow(QWidget):
                 strSerialNumber += chr(per)
             print("user serial number: " + strSerialNumber)
             self.device_dropdown.addItem(f"[{i}]USB: {user_defined_name} {model_name} ({strSerialNumber})")
+
