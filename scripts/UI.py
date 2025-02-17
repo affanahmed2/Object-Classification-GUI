@@ -326,6 +326,8 @@ class MainWindow(QWidget):
         input_layout.addLayout(min_area_layout)
 
         right_side_layout.addLayout(input_layout)
+        
+        right_side_layout.addSpacing(50)
 
         # dropdown to change camera output
         change_output_layout = QHBoxLayout()
@@ -363,7 +365,6 @@ class MainWindow(QWidget):
         """
         if self.modelKNN is not None:
             self.modelKNN.screen = index
-            print(f"Output changed to option {index}")
 
 
     def custom_default_action(self, parameter_name):
