@@ -5,6 +5,7 @@ This project is a GUI-based object classification tool that uses OpenCV and PyQt
 - Providing a user-friendly interface for image classification.
 - Extracting color histograms in HSV format for feature representation.
 - Supporting dataset training and classification tasks.
+- We used KNN model with k = 3 for classifications.
 
 ## 2️⃣ Equipment and Technologies Used
 
